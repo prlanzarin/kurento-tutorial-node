@@ -16,7 +16,6 @@
  */
 
 var ws = new WebSocket('wss://' + location.host + '/helloworld');
-var videoInput;
 var videoOutput;
 var webRtcPeer;
 var state = null;
@@ -24,11 +23,11 @@ var state = null;
 const I_CAN_START = 0;
 const I_CAN_STOP = 1;
 const I_AM_STARTING = 2;
+var confNumber = null;
 
 window.onload = function() {
 	console = new Console();
 	console.log('Page loaded ...');
-	videoInput = document.getElementById('videoInput');
 	videoOutput = document.getElementById('videoOutput');
 	setState(I_CAN_START);
 }
@@ -67,17 +66,23 @@ function start() {
 
 	// Disable start button
 	setState(I_AM_STARTING);
-	showSpinner(videoInput, videoOutput);
+	showSpinner(videoOutput);
 
-	console.log('Creating WebRtcPeer and generating local sdp offer ...');
+	var conference = document.getElementById('name').value;
+	if (conference == '') {
+		window.alert("You must insert the conference number");
+		return;
+	}
+
+	console.log('Creating WebRtcPeer and generating local sdp offer for conference' + conference);
+
 
     var options = {
-      localVideo: videoInput,
       remoteVideo: videoOutput,
       onicecandidate : onIceCandidate
     }
 
-    webRtcPeer = kurentoUtils.WebRtcPeer.WebRtcPeerSendrecv(options, function(error) {
+    webRtcPeer = kurentoUtils.WebRtcPeer.WebRtcPeerRecvonly(options, function(error) {
         if(error) return onError(error);
         this.generateOffer(onOffer);
     });
@@ -126,7 +131,7 @@ function stop() {
 		}
 		sendMessage(message);
 	}
-	hideSpinner(videoInput, videoOutput);
+	hideSpinner(videoOutput);
 }
 
 function setState(nextState) {
