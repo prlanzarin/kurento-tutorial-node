@@ -10,9 +10,7 @@
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
+ * See the License for the specific language governing permissions and * limitations under the License.  *
  */
 
 var path = require('path');
@@ -61,6 +59,12 @@ app.use(sessionHandler);
 var sessions = {};
 var candidatesQueue = {};
 var kurentoClient = null;
+var webRtcEndpoints = null;
+var rtpEndpoints = {};
+var runningMediaSources = {};
+var kurentoClient = null;
+var mediaPipeline = null;
+var kurentoToken = null;
 
 /*
  * Server startup
@@ -230,21 +234,63 @@ function start(sessionId, ws, sdpOffer, callback) {
     });
 }
 
-function createMediaElements(pipeline, ws, callback) {
-    pipeline.create('WebRtcEndpoint', function(error, webRtcEndpoint) {
-        if (error) {
-            return callback(error);
-        }
+function createMediaElements(meetingId, mediaId, mediaUri, pipeline, ws, callback) {
+    console.log("  [media] New player endpoint for " + mediaId + " (" + mediaUri + ")");
 
-        return callback(null, webRtcEndpoint);
-    });
+    if (rtpEndpoints[meetingId] && rtpEndpoints[meetingId][mediaId]){
+        console.log("  [rtp] There's already an rtpEndpoint for this media. Won't create a new one");
+        return;
+    }
+
+    if (webRtcEndpoints[mediaId]){
+        console.log("  [media] WebRTC endpoint already exists");
+        console.log("  [rtp] Creating new rtp endpoint");
+        pipeline.create('RtpEndpoint', function(error, rtpEndpoint){
+            if (error) {
+                return callback(error);
+            }
+
+            if (!rtpEndpoints[meetingId]) {
+                rtpEndpoints[meetingId] = {};
+            }
+
+            rtpEndpoint.meetingId = meetingId;
+            rtpEndpoints[meetingId][mediaId] = rtpEndpoint;
+            webRtcEndpoints[mediaId].listeners++;
+            return callback(null, webRtcEndpoints[mediaId], rtpEndpoint);
+        });
+    }
+    else {
+        pipeline.create('WebRtcEndpoint', function(error, webRtcEndpoint) {
+            if (error) {
+                return callback(error);
+            }
+            webRtcEndpoints.listeners = 0;
+            webRtcEndpoints[mediaId] = webRtcEndpoint;
+            pipeline.create('RtpEndpoint', function(error, rtpEndpoint){
+                if (error) {
+                    return callback(error);
+                }
+
+                if (!rtpEndpoints[meetingId]) {
+                    rtpEndpoints[meetingId] = {};
+                }
+
+                rtpEndpoint.meetingId = meetingId;
+                rtpEndpoints[meetingId][mediaId] = rtpEndpoint;
+                webRtcEndpoints[mediaId].listeners++;
+                return callback(null, webRtcEndpoint, rtpEndpoint);
+            });
+        });
+    }
 }
 
-function connectMediaElements(webRtcEndpoint, callback) {
-    webRtcEndpoint.connect(webRtcEndpoint, function(error) {
+function connectMediaElements(webRtcEndpoint, rtpEndpoint, callback) {
+    webRtcEndpoint.connect(rtpEndpoint, function(error) {
         if (error) {
             return callback(error);
         }
+        console.log("  [rtp] Connected new WebRTC endpoint to a RTPEndpoint");
         return callback(null);
     });
 }
