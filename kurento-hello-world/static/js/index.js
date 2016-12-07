@@ -68,13 +68,13 @@ function start() {
 	setState(I_AM_STARTING);
 	showSpinner(videoOutput);
 
-	var conference = document.getElementById('name').value;
-	if (conference == '') {
+	confNumber = document.getElementById('name').value;
+	if (confNumber == '') {
 		window.alert("You must insert the conference number");
 		return;
 	}
 
-	console.log('Creating WebRtcPeer and generating local sdp offer for conference' + conference);
+	console.log('Creating WebRtcPeer and generating local sdp offer for conference' + confNumber);
 
 
     var options = {
@@ -104,7 +104,8 @@ function onOffer(error, offerSdp) {
 	console.info('Invoking SDP offer callback function ' + location.host);
 	var message = {
 		id : 'start',
-		sdpOffer : offerSdp
+		sdpOffer : offerSdp,
+        conferenceNumber: confNumber 
 	}
 	sendMessage(message);
 }

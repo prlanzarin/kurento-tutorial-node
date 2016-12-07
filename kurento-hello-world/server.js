@@ -59,12 +59,19 @@ app.use(sessionHandler);
 var sessions = {};
 var candidatesQueue = {};
 var kurentoClient = null;
-var webRtcEndpoints = null;
+var webRtcEndpoints = {};
 var rtpEndpoints = {};
 var runningMediaSources = {};
-var kurentoClient = null;
-var mediaPipeline = null;
+var mediaPipeline = {};
 var kurentoToken = null;
+
+/*
+ * FIXME hardcoded *
+ */
+var kurentoId = 5;
+// var conferenceNumber = 70000;
+var userId = 1;
+
 
 /*
  * Server startup
@@ -113,7 +120,7 @@ wss.on('connection', function(ws) {
         switch (message.id) {
         case 'start':
             sessionId = request.session.id;
-            start(sessionId, ws, message.sdpOffer, function(error, sdpAnswer) {
+            start(sessionId, ws, message.sdpOffer, message.conferenceNumber, function(error, sdpAnswer) {
                 if (error) {
                     return ws.send(JSON.stringify({
                         id : 'error',
@@ -168,7 +175,7 @@ function getKurentoClient(callback) {
     });
 }
 
-function start(sessionId, ws, sdpOffer, callback) {
+function start(sessionId, ws, sdpOffer, conferenceNumber, callback) {
     if (!sessionId) {
         return callback('Cannot use undefined sessionId');
     }
@@ -178,12 +185,13 @@ function start(sessionId, ws, sdpOffer, callback) {
             return callback(error);
         }
 
+        /* FIXME won't create one pipeline per sessionId */
         kurentoClient.create('MediaPipeline', function(error, pipeline) {
             if (error) {
                 return callback(error);
             }
 
-            createMediaElements(pipeline, ws, function(error, webRtcEndpoint) {
+            createMediaElements(conferenceNumber, kurentoId, sessionId,  pipeline, ws, function(error, webRtcEndpoint) {
                 if (error) {
                     pipeline.release();
                     return callback(error);
@@ -294,6 +302,29 @@ function connectMediaElements(webRtcEndpoint, rtpEndpoint, callback) {
         return callback(null);
     });
 }
+  function getMediaPipeline(videoId, callback) {
+      console.log("  [sip] Getting media pipeline for " + videoId);
+      if (kurentoClient === null) {
+        console.log('  [sip] Error: kurento Client is null.');
+        return callback(true);
+      }
+
+      if (mediaPipeline &&
+        mediaPipeline.hasOwnProperty(videoId)) {
+        console.log(" [sip] Pipeline already created.");
+        return callback(null, mediaPipeline[videoId]);
+      }
+
+      kurentoClient.create('MediaPipeline', function(error, pipeline) {
+        console.log(" [sip] Creating new pipeline.");
+        if (error) {
+            return callback(error);
+        }
+        mediaPipeline[videoId] = pipeline;
+        callback(null, pipeline);
+      });
+  }
+
 
 function stop(sessionId) {
     if (sessions[sessionId]) {
