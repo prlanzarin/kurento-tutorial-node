@@ -72,7 +72,6 @@ var kurentoId = 5;
 // var conferenceNumber = 70000;
 var userId = 1;
 
-
 /*
  * Server startup
  */
@@ -320,7 +319,7 @@ function connectMediaElements(webRtcEndpoint, rtpEndpoint, callback) {
         if (error) {
             return callback(error);
         }
-        mediaPipeline[conference] = pipeline;
+        mediaPipelines[conference] = pipeline;
         callback(null, pipeline);
       });
   }
