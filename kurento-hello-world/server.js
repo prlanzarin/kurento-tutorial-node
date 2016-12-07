@@ -62,7 +62,7 @@ var kurentoClient = null;
 var webRtcEndpoints = {};
 var rtpEndpoints = {};
 var runningMediaSources = {};
-var mediaPipeline = {};
+var mediaPipelines = {};
 var kurentoToken = null;
 
 /*
@@ -185,8 +185,8 @@ function start(sessionId, ws, sdpOffer, conferenceNumber, callback) {
             return callback(error);
         }
 
-        /* FIXME won't create one pipeline per sessionId */
-        kurentoClient.create('MediaPipeline', function(error, pipeline) {
+        /* we're creating one pipeline per sessionId */
+        getMediaPipeline(conferenceNumber, function(error, pipeline) {
             if (error) {
                 return callback(error);
             }
@@ -302,25 +302,25 @@ function connectMediaElements(webRtcEndpoint, rtpEndpoint, callback) {
         return callback(null);
     });
 }
-  function getMediaPipeline(videoId, callback) {
-      console.log("  [sip] Getting media pipeline for " + videoId);
+  function getMediaPipeline(conference, callback) {
+      console.log("  [kms] Getting media pipeline for " + conference);
       if (kurentoClient === null) {
-        console.log('  [sip] Error: kurento Client is null.');
+        console.log('  [kms] Error: kurento Client is null.');
         return callback(true);
       }
 
-      if (mediaPipeline &&
-        mediaPipeline.hasOwnProperty(videoId)) {
-        console.log(" [sip] Pipeline already created.");
-        return callback(null, mediaPipeline[videoId]);
+      if (mediaPipelines &&
+        mediaPipelines.hasOwnProperty(conference)) {
+        console.log(" [kms] Pipeline already created.");
+        return callback(null, mediaPipelines[conference]);
       }
 
       kurentoClient.create('MediaPipeline', function(error, pipeline) {
-        console.log(" [sip] Creating new pipeline.");
+        console.log(" [kms] Creating new pipeline.");
         if (error) {
             return callback(error);
         }
-        mediaPipeline[videoId] = pipeline;
+        mediaPipeline[conference] = pipeline;
         callback(null, pipeline);
       });
   }
