@@ -19,6 +19,7 @@ var ws = new WebSocket('wss://' + location.host + '/helloworld');
 var videoOutput;
 var webRtcPeer;
 var state = null;
+var conference;
 
 const I_CAN_START = 0;
 const I_CAN_STOP = 1;
@@ -64,15 +65,15 @@ ws.onmessage = function(message) {
 function start() {
 	console.log('Starting video call ...')
 
-	// Disable start button
-	setState(I_AM_STARTING);
-	showSpinner(videoOutput);
-
-	var conference = document.getElementById('name').value;
+	conference = document.getElementById('name').value;
 	if (conference == '') {
 		window.alert("You must insert the conference number");
 		return;
 	}
+
+	// Disable start button
+	setState(I_AM_STARTING);
+	showSpinner(videoOutput);
 
 	console.log('Creating WebRtcPeer and generating local sdp offer for conference' + conference);
 
@@ -104,6 +105,7 @@ function onOffer(error, offerSdp) {
 	console.info('Invoking SDP offer callback function ' + location.host);
 	var message = {
 		id : 'start',
+		conference: conference,
 		sdpOffer : offerSdp
 	}
 	sendMessage(message);

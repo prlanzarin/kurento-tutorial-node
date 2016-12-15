@@ -24,12 +24,15 @@ var minimist = require('minimist');
 var ws = require('ws');
 var kurento = require('kurento-client');
 var fs    = require('fs');
-var https = require('https');
+var http = require('http');
+var sipjs = require('sip.js');
+var kmh = require('./KurentoMediaHandler');
 
 var argv = minimist(process.argv.slice(2), {
     default: {
-        as_uri: 'https://localhost:8443/',
-        ws_uri: 'ws://fs-dev.mconf.com:8888/kurento'
+        as_uri: 'http://192.168.2.111:8888/',
+        ws_uri: 'ws://fs-dev.mconf.com:8888/kurento',
+        fs_uri: '192.168.2.105:5066'
     }
 });
 
@@ -46,15 +49,6 @@ var app = express();
  */
 app.use(cookieParser());
 
-var sessionHandler = session({
-    secret : 'none',
-    rolling : true,
-    resave : true,
-    saveUninitialized : true
-});
-
-app.use(sessionHandler);
-
 /*
  * Definition of global variables.
  */
@@ -67,7 +61,7 @@ var kurentoClient = null;
  */
 var asUrl = url.parse(argv.as_uri);
 var port = asUrl.port;
-var server = https.createServer(options, app).listen(port, function() {
+var server = http.createServer(app).listen(port, function() {
     console.log('Kurento Tutorial started');
     console.log('Open ' + url.format(asUrl) + ' with a WebRTC capable browser');
 });
@@ -81,34 +75,30 @@ var wss = new ws.Server({
  * Management of WebSocket messages
  */
 wss.on('connection', function(ws) {
+    console.log('Connection opened');
     var sessionId = null;
     var request = ws.upgradeReq;
     var response = {
         writeHead : {}
     };
 
-    sessionHandler(request, response, function(err) {
-        sessionId = request.session.id;
-        console.log('Connection received with sessionId ' + sessionId);
-    });
-
     ws.on('error', function(error) {
-        console.log('Connection ' + sessionId + ' error');
+        console.log('Connection error');
         stop(sessionId);
     });
 
     ws.on('close', function() {
-        console.log('Connection ' + sessionId + ' closed');
+        console.log('Connection closed');
         stop(sessionId);
     });
 
     ws.on('message', function(_message) {
         var message = JSON.parse(_message);
-        console.log('Connection ' + sessionId + ' received message ', message);
+        // console.log('Connection received message\n', message);
 
         switch (message.id) {
         case 'start':
-            sessionId = request.session.id;
+            sessionId = message.conference;
             start(sessionId, ws, message.sdpOffer, function(error, sdpAnswer) {
                 if (error) {
                     return ws.send(JSON.stringify({
@@ -116,10 +106,6 @@ wss.on('connection', function(ws) {
                         message : error
                     }));
                 }
-                ws.send(JSON.stringify({
-                    id : 'startResponse',
-                    sdpAnswer : sdpAnswer
-                }));
             });
             break;
 
@@ -146,107 +132,103 @@ wss.on('connection', function(ws) {
  * Definition of functions
  */
 
-// Recover kurentoClient for the first time.
-function getKurentoClient(callback) {
-    if (kurentoClient !== null) {
-        return callback(null, kurentoClient);
-    }
-
-    kurento(argv.ws_uri, function(error, _kurentoClient) {
-        if (error) {
-            console.log("Could not find media server at address " + argv.ws_uri);
-            return callback("Could not find media server at address" + argv.ws_uri
-                    + ". Exiting with error " + error);
-        }
-
-        kurentoClient = _kurentoClient;
-        callback(null, kurentoClient);
-    });
-}
-
 function start(sessionId, ws, sdpOffer, callback) {
-    if (!sessionId) {
-        return callback('Cannot use undefined sessionId');
+  getKurentoClient(function(error, kurentoClient) {
+    if (error) {
+      return callback(error);
     }
 
-    getKurentoClient(function(error, kurentoClient) {
+    getMediaPipeline(kurentoClient, sessionId, function(error, pipeline) {
+      if (error) {
+        return callback(error);
+      }
+
+      pipeline.create('WebRtcEndpoint', function(error, webRtcEndpoint) {
         if (error) {
-            return callback(error);
+          pipeline.release();
+          return callback(error);
         }
 
-        kurentoClient.create('MediaPipeline', function(error, pipeline) {
+        if (candidatesQueue[sessionId]) {
+          while(candidatesQueue[sessionId].length) {
+            var candidate = candidatesQueue[sessionId].shift();
+            webRtcEndpoint.addIceCandidate(candidate);
+          }
+        }
+
+        webRtcEndpoint.on('OnIceCandidate', function(event) {
+          var candidate = kurento.getComplexType('IceCandidate')(event.candidate);
+          ws.send(JSON.stringify({
+            id : 'iceCandidate',
+            candidate : candidate
+          }));
+        });
+
+        webRtcEndpoint.processOffer(sdpOffer, function(error, sdpAnswer) {
+          if (error) {
+            pipeline.release();
+            return callback(error);
+          }
+
+          ws.send(JSON.stringify({
+            id: 'startResponse',
+            sdpAnswer: sdpAnswer
+          }));
+
+          getConferenceAudioEndpoint(pipeline, sessionId, function(error, rtpEndpoint) {
             if (error) {
-                return callback(error);
+              pipeline.release();
+              return callback(error);
             }
 
-            createMediaElements(pipeline, ws, function(error, webRtcEndpoint) {
-                if (error) {
-                    pipeline.release();
-                    return callback(error);
-                }
+            rtpEndpoint.connect(webRtcEndpoint, function(error) {
+              createUserAgent(sessionId, argv.fs_uri, function(error, ua) {
+                var sip_configuration = {
+                  local_ip_address: "192.168.2.111",
+                  source_audio_ip_address: "169.57.148.140",
+                  source_audio_port: 7000,
+                };
 
-                if (candidatesQueue[sessionId]) {
-                    while(candidatesQueue[sessionId].length) {
-                        var candidate = candidatesQueue[sessionId].shift();
-                        webRtcEndpoint.addIceCandidate(candidate);
+                kmh.KurentoMediaHandler.setup(sip_configuration);
+
+                var options = {
+                  media: {
+                    constraints: {
+                        audio: true,
+                        video: false
                     }
-                }
+                  },
+                  params: {
+                    from_displayName : sessionId
+                  }
+                };
 
-                connectMediaElements(webRtcEndpoint, function(error) {
-                    if (error) {
-                        pipeline.release();
-                        return callback(error);
-                    }
+                session = ua.invite('sip:' + sessionId + '@' + argv.fs_uri);
 
-                    webRtcEndpoint.on('OnIceCandidate', function(event) {
-                        var candidate = kurento.getComplexType('IceCandidate')(event.candidate);
-                        ws.send(JSON.stringify({
-                            id : 'iceCandidate',
-                            candidate : candidate
-                        }));
-                    });
-
-                    webRtcEndpoint.processOffer(sdpOffer, function(error, sdpAnswer) {
-                        if (error) {
-                            pipeline.release();
-                            return callback(error);
-                        }
-
-                        sessions[sessionId] = {
-                            'pipeline' : pipeline,
-                            'webRtcEndpoint' : webRtcEndpoint
-                        }
-                        return callback(null, sdpAnswer);
-                    });
-
-                    webRtcEndpoint.gatherCandidates(function(error) {
-                        if (error) {
-                            return callback(error);
-                        }
-                    });
+                session.on('accepted', function(data) {
+                  var rtpSdpOffer = session.mediaHandler.remote_sdp;
+                  console.log(rtpSdpOffer);
+                  rtpEndpoint.processOffer(rtpSdpOffer, function(error, rtpSdpAnswer) {
+                    sessions[sessionId] = {
+                      'pipeline': pipeline,
+                      'webRtcEndpoint': webRtcEndpoint,
+                      'rtpEndpoint': rtpEndpoint
+                    };
+                  });
                 });
-            });
+              });
+            })
+          });
         });
-    });
-}
 
-function createMediaElements(pipeline, ws, callback) {
-    pipeline.create('WebRtcEndpoint', function(error, webRtcEndpoint) {
-        if (error) {
+        webRtcEndpoint.gatherCandidates(function(error) {
+          if (error) {
             return callback(error);
-        }
-
-        return callback(null, webRtcEndpoint);
+          }
+        });
+      });
     });
-}
-
-function connectMediaElements(webRtcEndpoint, callback) {
-    webRtcEndpoint.connect(webRtcEndpoint, function(error) {
-        if (error) {
-            return callback(error);
-        }
-        return callback(null);
-    });
+  });
 }
 
 function stop(sessionId) {
@@ -264,17 +246,83 @@ function onIceCandidate(sessionId, _candidate) {
     var candidate = kurento.getComplexType('IceCandidate')(_candidate);
 
     if (sessions[sessionId]) {
-        console.info('Sending candidate');
         var webRtcEndpoint = sessions[sessionId].webRtcEndpoint;
         webRtcEndpoint.addIceCandidate(candidate);
     }
     else {
-        console.info('Queueing candidate');
         if (!candidatesQueue[sessionId]) {
             candidatesQueue[sessionId] = [];
         }
         candidatesQueue[sessionId].push(candidate);
     }
+}
+
+function createUserAgent(sessionId, server, callback) {
+  console.log("Creating new user agent");
+
+  var configuration = {
+    uri: 'sip:' + encodeURIComponent(sessionId) + '@' + server,
+    wsServers: 'ws://' + server + '/ws',
+    displayName: sessionId,
+    register: false,
+    traceSip: true,
+    autostart: false,
+    userAgentString: "BigBlueButton",
+    mediaHandlerFactory: kmh.KurentoMediaHandler.defaultFactory
+  };
+  
+  var ua = new sipjs.UA(configuration);
+  ua.start();
+
+  if (ua) {
+    return callback(null, ua);
+  } else {
+    return callback(true);
+  }
+}
+
+function getKurentoClient(callback) {
+  if (kurentoClient !== null) {
+    return callback(null, kurentoClient);
+  }
+
+  kurento(argv.ws_uri, function(error, _kurentoClient) {
+    if (error) {
+      console.log("Could not find media server at address " + argv.ws_uri);
+      return callback("Exiting with error " + error);
+    }
+
+    kurentoClient = _kurentoClient;
+    callback(null, kurentoClient);
+  });
+}
+
+function getMediaPipeline(kurentoClient, sessionId, callback) {
+  if (sessions[sessionId] != null) {
+    return callback(null, sessions[sessionId].pipeline);
+  }
+
+  kurentoClient.create('MediaPipeline', function(error, pipeline) {
+    if (error) {
+      return callback(error);
+    }
+
+    return callback(null, pipeline);
+  })
+}
+
+function getConferenceAudioEndpoint(pipeline, sessionId, callback) {
+  if (sessions[sessionId] != null) {
+    return callback(null, sessions[sessionId].rtpEndpoint);
+  }
+
+  pipeline.create('RtpEndpoint', function(error, rtpEndpoint) {
+    if (error) {
+      return callback(error);
+    }
+
+    return callback(null, rtpEndpoint);
+  });
 }
 
 app.use(express.static(path.join(__dirname, 'static')));
